@@ -1,0 +1,125 @@
+-- Tabella CLIENTE
+CREATE TABLE cliente (
+    id_cliente BIGSERIAL PRIMARY KEY,
+    nome VARCHAR(100) NOT NULL,
+    cognome VARCHAR(100) NOT NULL,
+    data_nascita DATE,
+    codice_fiscale VARCHAR(16) UNIQUE,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Tabella PRODOTTO (con gestione concorrenza)
+CREATE TABLE prodotto (
+    id_prodotto BIGSERIAL PRIMARY KEY,
+    codice VARCHAR(50) UNIQUE NOT NULL,
+    nome VARCHAR(255) NOT NULL,
+    stock INTEGER NOT NULL DEFAULT 0 CHECK (stock >= 0),
+    version INTEGER NOT NULL DEFAULT 0,  -- Per lock ottimistico
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Tabella ORDINE
+CREATE TABLE ordine (
+    id_ordine BIGSERIAL PRIMARY KEY,
+    id_cliente BIGINT NOT NULL REFERENCES cliente(id_cliente),
+    stato VARCHAR(20) NOT NULL DEFAULT 'ORDINATO' 
+        CHECK (stato IN ('ORDINATO', 'IN_CONSEGNA', 'CONSEGNATO')),
+    data_creazione TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    data_aggiornamento TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_cliente FOREIGN KEY (id_cliente) REFERENCES cliente(id_cliente)
+);
+
+-- Tabella ORDINE_ITEM
+CREATE TABLE ordine_item (
+    id_ordine_item BIGSERIAL PRIMARY KEY,
+    id_ordine BIGINT NOT NULL REFERENCES ordine(id_ordine) ON DELETE CASCADE,
+    id_prodotto BIGINT NOT NULL REFERENCES prodotto(id_prodotto),
+    quantita INTEGER NOT NULL CHECK (quantita > 0),
+    prezzo_unitario DECIMAL(10, 2) NOT NULL,
+    CONSTRAINT fk_ordine FOREIGN KEY (id_ordine) REFERENCES ordine(id_ordine),
+    CONSTRAINT fk_prodotto FOREIGN KEY (id_prodotto) REFERENCES prodotto(id_prodotto)
+);
+
+-- Indici per performance
+CREATE INDEX idx_ordine_cliente ON ordine(id_cliente);
+CREATE INDEX idx_ordine_item_ordine ON ordine_item(id_ordine);
+CREATE INDEX idx_ordine_item_prodotto ON ordine_item(id_prodotto);
+CREATE INDEX idx_prodotto_codice ON prodotto(codice);
+
+-- Funzione per updated_at automatico
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger per aggiornamento automatico
+CREATE TRIGGER update_cliente_updated_at
+BEFORE UPDATE ON cliente
+FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_prodotto_updated_at
+BEFORE UPDATE ON prodotto
+FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_ordine_updated_at
+BEFORE UPDATE ON ordine
+FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Vista per report ordini
+CREATE VIEW vista_ordini_con_dettagli AS
+SELECT 
+    o.id_ordine,
+    c.nome || ' ' || c.cognome AS cliente,
+    o.stato,
+    o.data_creazione,
+    COUNT(oi.id_ordine_item) AS numero_prodotti,
+    SUM(oi.quantita * oi.prezzo_unitario) AS totale
+FROM ordine o
+JOIN cliente c ON o.id_cliente = c.id_cliente
+LEFT JOIN ordine_item oi ON o.id_ordine = oi.id_ordine
+GROUP BY o.id_ordine, c.nome, c.cognome, o.stato, o.data_creazione;
+
+-- Funzione per verificare lo stock prima di inserire un ordine
+CREATE OR REPLACE FUNCTION verifica_stock()
+RETURNS TRIGGER AS $$
+DECLARE
+    disponibile INTEGER;
+BEGIN
+    SELECT stock INTO disponibile FROM prodotto WHERE id_prodotto = NEW.id_prodotto;
+    
+    IF disponibile < NEW.quantita THEN
+        RAISE EXCEPTION 'Stock insufficiente per il prodotto ID %: richiesti %, disponibili %', 
+            NEW.id_prodotto, NEW.quantita, disponibile;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger per controllo stock
+CREATE TRIGGER tr_verifica_stock_before_insert
+BEFORE INSERT ON ordine_item
+FOR EACH ROW EXECUTE FUNCTION verifica_stock();
+
+-- Funzione per aggiornare lo stock dopo l'inserimento
+CREATE OR REPLACE FUNCTION aggiorna_stock()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE prodotto 
+    SET stock = stock - NEW.quantita
+    WHERE id_prodotto = NEW.id_prodotto;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger per aggiornamento stock
+CREATE TRIGGER tr_aggiorna_stock_after_insert
+AFTER INSERT ON ordine_item
+FOR EACH ROW EXECUTE FUNCTION aggiorna_stock();

@@ -1,0 +1,51 @@
+Task 1 - Modelli di base
+Entity:
+Cliente
+Prodotto
+Ordine
+OrdineItem
+
+Repository:
+
+ClienteRepository
+ProdottoRepository
+OrdineRepository
+
+DTO:
+
+ClienteRequestDto / ClienteResponseDto
+ProdottoRequestDto / ProdottoResponseDto
+OrdineRequestDto / OrdineResponseDto
+
+Mapper:
+
+ClienteMapper
+ProdottoMapper
+OrdineMapper
+
+Task 2 - API REST
+Service:
+
+ClienteService (interfaccia)
+ClienteServiceImpl
+ProdottoService (interfaccia)
+ProdottoServiceImpl
+OrdineService (interfaccia)
+OrdineServiceImpl
+
+Controller:
+ClienteController
+ProdottoController
+OrdineController
+
+Eccezioni:
+EntityNotFoundException
+InsufficientStockException
+GlobalExceptionHandler
+
+Task 3 - Funzionalità avanzate
+Estensioni:
+
+OrdineStato (enum)
+Paginazione (Pageable)
+per la conconcorenza(@Version in Prodotto)
